@@ -776,27 +776,23 @@ namespace FlaxEditor.Modules
         /// Adds the proxy.
         /// </summary>
         /// <param name="proxy">The proxy type.</param>
-        /// <param name="rebuild">Should rebuild entire database after addition.</param>
-        public void AddProxy(ContentProxy proxy, bool rebuild = false)
+        public void AddProxy(ContentProxy proxy)
         {
             var oldProxy = Proxy.Find(x => x.GetType().ToString().Equals(proxy.GetType().ToString(), StringComparison.Ordinal));
             if (oldProxy != null)
                 RemoveProxy(oldProxy);
             Proxy.Insert(0, proxy);
-            if (rebuild)
-                Rebuild(true);
+            Rebuild();
         }
 
         /// <summary>
         /// Removes the proxy.
         /// </summary>
         /// <param name="proxy">The proxy type.</param>
-        /// <param name="rebuild">Should rebuild entire database after removal.</param>
-        public void RemoveProxy(ContentProxy proxy, bool rebuild = false)
+        public void RemoveProxy(ContentProxy proxy)
         {
             Proxy.Remove(proxy);
-            if (rebuild)
-                Rebuild(true);
+            Rebuild();
         }
 
         /// <summary>
@@ -1360,7 +1356,7 @@ namespace FlaxEditor.Modules
                     removeProxies.Add(proxy);
             }
             foreach (var proxy in removeProxies)
-                RemoveProxy(proxy, false);
+                RemoveProxy(proxy);
 
             _isDuringFastSetup = false;
             _enableEvents = enabledEvents;
