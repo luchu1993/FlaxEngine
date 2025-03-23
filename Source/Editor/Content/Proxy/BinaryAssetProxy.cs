@@ -51,6 +51,8 @@ namespace FlaxEditor.Content
                 return new ModelItem(path, ref id, typeName, type);
             if (typeof(SkinnedModel).IsAssignableFrom(type))
                 return new SkinnedModeItem(path, ref id, typeName, type);
+            if (typeof(Animation).IsAssignableFrom(type))
+                return new AnimationItem(path, ref id, typeName, type);
 
             ContentItemSearchFilter searchFilter;
             if (typeof(MaterialBase).IsAssignableFrom(type))
@@ -59,8 +61,6 @@ namespace FlaxEditor.Content
                 searchFilter = ContentItemSearchFilter.Prefab;
             else if (typeof(SceneAsset).IsAssignableFrom(type))
                 searchFilter = ContentItemSearchFilter.Scene;
-            else if (typeof(Animation).IsAssignableFrom(type))
-                searchFilter = ContentItemSearchFilter.Animation;
             else if (typeof(ParticleEmitter).IsAssignableFrom(type))
                 searchFilter = ContentItemSearchFilter.Particles;
             else

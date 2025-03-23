@@ -202,4 +202,32 @@ namespace FlaxEditor.Content
             }
         }
     }
+
+
+    /// <summary>
+    /// Implementation of <see cref="BinaryAssetItem"/> for <see cref="Animation"/> assets.
+    /// </summary>
+    /// <seealso cref="FlaxEditor.Content.BinaryAssetItem" />
+    public class AnimationItem : BinaryAssetItem
+    {
+        /// <inheritdoc />
+        public AnimationItem(string path, ref Guid id, string typeName, Type type)
+            : base(path, ref id, typeName, type, ContentItemSearchFilter.Animation)
+        {
+        }
+
+        /// <inheritdoc />
+        protected override void OnBuildTooltipText(StringBuilder sb)
+        {
+            base.OnBuildTooltipText(sb);
+
+            var asset = FlaxEngine.Content.Load<Animation>(ID, 100);
+            if (asset)
+            {
+                sb.Append("Length: ").Append(asset.Info.Length).AppendLine("s");
+                sb.Append("Frames: ").Append(asset.Info.FramesCount).AppendLine();
+                sb.Append("MemoryUsage: ").AppendLine(Utilities.Utils.FormatBytesCount((ulong)asset.Info.MemoryUsage));
+            }
+        }
+    }
 }
