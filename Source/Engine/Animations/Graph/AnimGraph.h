@@ -242,10 +242,10 @@ public:
         float TimePosition;
         uint64 LastUpdateFrame;
     };
-
+    
     struct MultiBlendBucket
     {
-        float TimePosition;
+        float NormalizedTimePos;
         uint64 LastUpdateFrame;
     };
 
@@ -858,12 +858,21 @@ private:
         BlendAdditive,
     };
 
+    struct MultiBlendSampleData
+    {
+        Animation* Anim;
+        float PrevTimePos;
+        float NewTimePos;
+    };
+
     int32 GetRootNodeIndex(Animation* anim);
     void ProcessAnimEvents(AnimGraphNode* node, bool loop, float length, float animPos, float animPrevPos, Animation* anim, float speed);
     void ProcessAnimation(AnimGraphImpulse* nodes, AnimGraphNode* node, bool loop, float length, float pos, float prevPos, Animation* anim, float speed, float weight = 1.0f, ProcessAnimationMode mode = ProcessAnimationMode::Override, BitArray<InlinedAllocation<8>>* usedNodes = nullptr);
     Variant SampleAnimation(AnimGraphNode* node, bool loop, float length, float prevTimePos, float& newTimePos, Animation* anim, float speed);
     Variant SampleAnimationsWithBlend(AnimGraphNode* node, bool loop, float length, float prevTimePos, float& newTimePos, Animation* animA, Animation* animB, float speedA, float speedB, float alpha);
     Variant SampleAnimationsWithBlend(AnimGraphNode* node, bool loop, float length, float prevTimePos, float& newTimePos, Animation* animA, Animation* animB, Animation* animC, float speedA, float speedB, float speedC, float alphaA, float alphaB, float alphaC);
+    Variant SampleAnimationsWithBlend(AnimGraphNode* node, bool loop, MultiBlendSampleData& aSample, MultiBlendSampleData& bSample, float alpha);
+
     Variant Blend(AnimGraphNode* node, const Value& poseA, const Value& poseB, float alpha, AlphaBlendMode alphaMode);
     Variant SampleState(AnimGraphContext& context, const AnimGraphNode* state);
     void InitStateTransition(AnimGraphContext& context, AnimGraphInstanceData::StateMachineBucket& stateMachineBucket, AnimGraphStateTransition* transition = nullptr);

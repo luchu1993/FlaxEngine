@@ -422,7 +422,8 @@ Variant AnimGraphExecutor::SampleAnimation(AnimGraphNode* node, bool loop, float
     return nodes;
 }
 
-Variant AnimGraphExecutor::SampleAnimationsWithBlend(AnimGraphNode* node, bool loop, float length, float prevTimePos, float& newTimePos, Animation* animA, Animation* animB, float speedA, float speedB, float alpha)
+Variant AnimGraphExecutor::SampleAnimationsWithBlend(AnimGraphNode* node, bool loop,
+    float length, float prevTimePos, float& newTimePos, Animation* animA, Animation* animB, float speedA, float speedB, float alpha)
 {
     // Skip if any animation is not ready to use
     if (animA == nullptr || !animA->IsLoaded() ||
@@ -464,6 +465,33 @@ Variant AnimGraphExecutor::SampleAnimationsWithBlend(AnimGraphNode* node, bool l
     ProcessAnimation(nodes, node, loop, length, newTimePos, prevTimePos, animC, speedC, alphaC, ProcessAnimationMode::BlendAdditive);
     NormalizeRotations(nodes, _rootMotionMode);
 
+    return nodes;
+}
+
+Variant AnimGraphExecutor::SampleAnimationsWithBlend(AnimGraphNode* node, bool loop, MultiBlendSampleData& aSample, MultiBlendSampleData& bSample, float alpha)
+{
+    Animation* animA = aSample.Anim;
+    Animation* animB = bSample.Anim;
+    // Skip if any animation is not ready to use
+    if (animA == nullptr || !animA->IsLoaded() ||
+        animB == nullptr || !animB->IsLoaded())
+        return Value::Null;
+
+    GetAnimSamplePos(loop, animA->GetLength(), aSample.PrevTimePos, aSample.NewTimePos);
+    GetAnimSamplePos(loop, animB->GetLength(), bSample.PrevTimePos, bSample.NewTimePos);
+
+    const auto nodes = node->GetNodes(this);
+    InitNodes(nodes);
+    
+    float blendLength = Math::Lerp(animA->GetLength(), animB->GetLength(), alpha);
+    nodes->Length = blendLength;
+    nodes->Position = blendLength * (aSample.NewTimePos / animA->GetLength());
+    
+    ProcessAnimation(nodes, node, loop, animA->GetLength(), aSample.NewTimePos, aSample.PrevTimePos, animA, 1, 1.0f - alpha, ProcessAnimationMode::Override);
+    ProcessAnimation(nodes, node, loop, animB->GetLength(), bSample.NewTimePos, bSample.PrevTimePos, animB, 1, alpha, ProcessAnimationMode::BlendAdditive);
+
+    NormalizeRotations(nodes, _rootMotionMode);
+    
     return nodes;
 }
 
@@ -822,7 +850,7 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             const float length = anim ? anim->GetLength() : 0.0f;
 
             // Calculate new time position
-            if (bucket.LastUpdateFrame == 0 && context.CurrentFrameIndex == 1)
+            if (bucket.LastUpdateFrame == 0)
             {
                 bucket.TimePosition = startTimePos;
                 
@@ -843,8 +871,7 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
         // Normalized Time
         case 1:
         {
-            const float startTimePos = (float)tryGetValue(node->GetBox(7), node->Values[3]);
-            value = startTimePos + bucket.TimePosition;
+            value = bucket.TimePosition;
             if (anim && anim->IsLoaded())
                 value.AsFloat /= anim->GetLength();
             break;
@@ -852,8 +879,7 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
         // Time
         case 2:
         {
-            const float startTimePos = (float)tryGetValue(node->GetBox(7), node->Values[3]);
-            value = startTimePos + bucket.TimePosition;
+            value = bucket.TimePosition;
             break;
         }
         // Length
@@ -1249,12 +1275,13 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             break;
 
         // Calculate new time position
-        if (speed < 0.0f && bucket.LastUpdateFrame < context.CurrentFrameIndex - 1)
+        if (bucket.LastUpdateFrame == 0)
         {
+            bucket.NormalizedTimePos = startTimePos;
             // If speed is negative and it's the first node update then start playing from end
-            bucket.TimePosition = data.Length;
+            if (speed < 0 && Math::IsZero(startTimePos))
+                bucket.NormalizedTimePos = data.Length;
         }
-        float newTimePos = bucket.TimePosition + context.DeltaTime * speed;
 
         ANIM_GRAPH_PROFILE_EVENT("Multi Blend 1D");
 
@@ -1267,11 +1294,17 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             // Get A animation data
             const auto aAnim = node->Assets[a].As<Animation>();
             auto aData = node->Values[4 + a * 2].AsFloat4();
-
+            float aAnimLength = aAnim->GetLength();
+            
             // Check single A case or the last valid animation
             if (x <= aData.X + ANIM_GRAPH_BLEND_THRESHOLD || b == ANIM_GRAPH_MULTI_BLEND_INVALID)
             {
-                value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, aData.W);
+                float prevTimePos = aAnimLength * bucket.NormalizedTimePos;
+                float newTimePos = prevTimePos + speed * aData.W * context.DeltaTime;
+                
+                value = SampleAnimation(node, loop, aAnimLength, prevTimePos, newTimePos, aAnim, 1);
+                
+                bucket.NormalizedTimePos = newTimePos / aAnimLength;
                 break;
             }
 
@@ -1279,11 +1312,17 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             ASSERT(b != ANIM_GRAPH_MULTI_BLEND_INVALID);
             const auto bAnim = node->Assets[b].As<Animation>();
             auto bData = node->Values[4 + b * 2].AsFloat4();
-
+            float bAnimLength = bAnim->GetLength();
+            
             // Check single B edge case
             if (Math::NearEqual(bData.X, x, ANIM_GRAPH_BLEND_THRESHOLD))
             {
-                value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, bAnim, bData.W);
+                float prevTimePos = bAnimLength * bucket.NormalizedTimePos;
+                float newTimePos = prevTimePos + speed * bData.W * context.DeltaTime;
+                
+                value = SampleAnimation(node, loop, bAnimLength, prevTimePos, newTimePos, bAnim, 1);
+
+                bucket.NormalizedTimePos = newTimePos / bAnimLength;
                 break;
             }
 
@@ -1291,11 +1330,28 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             const float alpha = (x - aData.X) / (bData.X - aData.X);
             if (alpha > 1.0f)
                 continue;
-            value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, bAnim, aData.W, bData.W, alpha);
+
+            float blendLength = Math::Lerp(aAnimLength, bAnimLength, alpha);
+
+            float aSpeedScale = aAnimLength / blendLength;
+            MultiBlendSampleData aSample;
+            aSample.Anim = aAnim;
+            aSample.PrevTimePos = aAnimLength * bucket.NormalizedTimePos;
+            aSample.NewTimePos = aSample.PrevTimePos + speed * aData.W * aSpeedScale * context.DeltaTime;
+
+            float bSpeedScale = bAnimLength / blendLength;
+            MultiBlendSampleData bSample;
+            bSample.Anim = bAnim;
+            bSample.PrevTimePos = bAnimLength * bucket.NormalizedTimePos;
+            bSample.NewTimePos = bSample.PrevTimePos + speed * bData.W * bSpeedScale * context.DeltaTime;
+            
+            value = SampleAnimationsWithBlend(node, loop, aSample, bSample, alpha);
+            
+            bucket.NormalizedTimePos = aSample.NewTimePos / aAnimLength;
+            
             break;
         }
-
-        bucket.TimePosition = newTimePos;
+            
         bucket.LastUpdateFrame = context.CurrentFrameIndex;
 
         break;
@@ -1353,9 +1409,9 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
         if (speed < 0.0f && bucket.LastUpdateFrame < context.CurrentFrameIndex - 1)
         {
             // If speed is negative and it's the first node update then start playing from end
-            bucket.TimePosition = data.Length;
+            bucket.NormalizedTimePos = data.Length;
         }
-        float newTimePos = bucket.TimePosition + context.DeltaTime * speed;
+        float newTimePos = bucket.NormalizedTimePos + context.DeltaTime * speed;
 
         ANIM_GRAPH_PROFILE_EVENT("Multi Blend 2D");
 
@@ -1396,19 +1452,19 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
                 if (Float2::DistanceSquared(p, points[0]) < ANIM_GRAPH_BLEND_THRESHOLD2)
                 {
                     // Use only vertex A
-                    value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, aData.W);
+                    value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, aData.W);
                     break;
                 }
                 if (Float2::DistanceSquared(p, points[1]) < ANIM_GRAPH_BLEND_THRESHOLD2)
                 {
                     // Use only vertex B
-                    value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, bAnim, bData.W);
+                    value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, bAnim, bData.W);
                     break;
                 }
                 if (Float2::DistanceSquared(p, points[2]) < ANIM_GRAPH_BLEND_THRESHOLD2)
                 {
                     // Use only vertex C
-                    value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, cAnim, cData.W);
+                    value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, cAnim, cData.W);
                     break;
                 }
 
@@ -1429,7 +1485,7 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
                     if (xAxis && yAxis)
                     {
                         // Single animation
-                        value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, aData.W);
+                        value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, aData.W);
                     }
                     else if (xAxis || yAxis)
                     {
@@ -1465,12 +1521,12 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
                                 blendData = { p.Y - v1.Y, v0.Y - v1.Y, cAnim, bAnim, &cData, &bData };
                         }
                         const float alpha = Math::IsZero(blendData.AlphaY) ? 0.0f : blendData.AlphaX / blendData.AlphaY;
-                        value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.TimePosition, newTimePos, blendData.AnimA, blendData.AnimB, blendData.AnimAd->W, blendData.AnimBd->W, alpha);
+                        value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, blendData.AnimA, blendData.AnimB, blendData.AnimAd->W, blendData.AnimBd->W, alpha);
                     }
                     else
                     {
                         // Use only vertex A for invalid triangle
-                        value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, aData.W);
+                        value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, aData.W);
                     }
                     break;
                 }
@@ -1479,7 +1535,7 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
                 const float u = 1.0f - v - w;
 
                 // Blend A and B and C
-                value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, bAnim, cAnim, aData.W, bData.W, cData.W, u, v, w);
+                value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, bAnim, cAnim, aData.W, bData.W, cData.W, u, v, w);
                 break;
             }
 
@@ -1515,17 +1571,17 @@ void AnimGraphExecutor::ProcessGroupAnimation(Box* boxBase, Node* nodeBase, Valu
             // Check if use only one sample
             if (bestWeight < ANIM_GRAPH_BLEND_THRESHOLD)
             {
-                value = SampleAnimation(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, aData.W);
+                value = SampleAnimation(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, aData.W);
             }
             else
             {
                 const auto bAnim = node->Assets[bestAnims[1]].As<Animation>();
                 const auto bData = node->Values[4 + bestAnims[1] * 2].AsFloat4();
-                value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.TimePosition, newTimePos, aAnim, bAnim, aData.W, bData.W, bestWeight);
+                value = SampleAnimationsWithBlend(node, loop, data.Length, bucket.NormalizedTimePos, newTimePos, aAnim, bAnim, aData.W, bData.W, bestWeight);
             }
         }
 
-        bucket.TimePosition = newTimePos;
+        bucket.NormalizedTimePos = newTimePos;
         bucket.LastUpdateFrame = context.CurrentFrameIndex;
 
         break;
